@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import "leaflet/dist/leaflet.css";
 import { MapContainer, TileLayer, Marker } from "react-leaflet";
 import MarkerClusterGroup from "react-leaflet-cluster";
@@ -10,12 +10,12 @@ import { Button, createTheme, OutlinedInput, Theme, ThemeProvider, Typography } 
 
 
 interface InputWindowProps {
-  mapCenterX: number,
-  mapCenterY: number,
+  baseMapPosition: [number, number],
   zoom: number,
   theme: Theme,
   handleSelection: (input: MapPoint) => any,
-  getPoints: (position: Position, zoom: number) => [MapPoint]
+  getPoints: (position: [number, number], zoom: number) => [MapPoint],
+  findLocation: (searchPhrase: string) => [number, number]
 };
 
 interface MapPoint {
@@ -24,18 +24,11 @@ interface MapPoint {
   name: string,
   description: string,
   service: string,
-  geocode: [number]
+  geocode: [number, number]
 };
 
-interface Position {
-  lat: string,
-  lng: string,
-  zoom: number
-}
-
 const LeafletMap: React.FC<InputWindowProps> = ({
-  mapCenterX = 52.22,
-  mapCenterY = 21.02,
+  baseMapPosition = [52.22, 21.02],
   zoom = 13,
   theme = createTheme({
     palette: {
@@ -75,19 +68,29 @@ const LeafletMap: React.FC<InputWindowProps> = ({
     }
   }),
   handleSelection,
-  getPoints
+  getPoints,
+  findLocation
 }) => {
   const [mapPoints, setMapPoints] = useState<[MapPoint]>([]);
-  const [isSearching, setIsSearching] = useState<boolean>(false);
   const [map, setMap] = useState(null);
   const [selectedPoint, setSelectedPoint] = useState<MapPoint>(null!);
-  const [position, setPosition] = useState(() => map ? map.getCenter() : { lat: mapCenterX, lng: mapCenterY })
+  const [position, setPosition] = useState<[number, number]>(baseMapPosition)
   const [zoomState, setZoomState] = useState(zoom);
+  const [searchPhrase, setSearchPhrase] = useState('');
+  const timerRef = useRef<number | null>(null);
 
   const onMove = useCallback(() => {
-    if (map)
-      setPosition(map.getCenter())
+    if (map) {
+      let pos = map.getCenter();
+      setPosition([pos.lat, pos.lng]);
+      setZoomState(map.getZoom());
+    }
   }, [map])
+
+  const setMapPosition = (point: MapPoint) => {
+    if (map)
+      map.setView(point.geocode, zoomState);
+  }
 
   useEffect(() => {
     if (map) {
@@ -99,15 +102,22 @@ const LeafletMap: React.FC<InputWindowProps> = ({
   }, [map, onMove])
 
   useEffect(() => {
-    if (position && !isSearching) {
-      setIsSearching(true);
-      setTimeout(() => {
+    let waitTime = position === baseMapPosition ? 0 : 500;
+
+    if (position) {
+      timerRef.current = setTimeout(() => {
         let points = getPoints(position, zoomState);
         setMapPoints(points);
-        setIsSearching(false);
-      }, 1000);
+      }, waitTime);
     }
-  }, [position, setPosition])
+
+    return () => {
+      if (timerRef.current) {
+        clearTimeout(timerRef.current);
+      }
+    };
+
+  }, [position])
 
   const getcustomIcon = (marker: MapPoint) => {
     return new Icon({
@@ -126,10 +136,18 @@ const LeafletMap: React.FC<InputWindowProps> = ({
 
   const handleSelectMarker = (point: MapPoint) => {
     setSelectedPoint(point);
+    setMapPosition(point);
   }
 
   const handleDeselectMarker = () => {
     setSelectedPoint(null!);
+  }
+
+  const handleSearchLocation = () => {
+    if(searchPhrase && searchPhrase !== ''){
+      const response = findLocation(searchPhrase);
+      setPosition(response);
+    }
   }
 
   let displayDetails = () => {
@@ -138,9 +156,6 @@ const LeafletMap: React.FC<InputWindowProps> = ({
         onClick={() => handleDeselectMarker()}
         aria-label="back"
         startIcon={<ArrowBackIcon />}
-        sx={{
-
-        }}
       >
         <Typography> Powrót </Typography>
       </Button>
@@ -151,15 +166,9 @@ const LeafletMap: React.FC<InputWindowProps> = ({
         <div className='name'>{selectedPoint.name}</div>
         <div className='description'>{selectedPoint.description}</div>
         <Button
-          onClick={() => handleSelection(selectedPoint)}
-          sx={{
-            borderRadius: "20px",
-            bgcolor: "rgb(106,24,19)",
-            ':hover': {
-              bgcolor: 'rgb(106,24,19)'
-            }
-          }} variant='contained'>
-          <Typography>Zatwierdź punkt</Typography>
+          onClick={() => handleSelection(selectedPoint)} 
+          variant='contained'>
+          <Typography> Zatwierdź punkt </Typography>
         </Button>
       </div>
     </>
@@ -168,12 +177,17 @@ const LeafletMap: React.FC<InputWindowProps> = ({
   let displayList = () => {
 
     return <><div className="location-input">
-      <OutlinedInput fullWidth placeholder="Adres" sx={{
-        borderRadius: "20px", "&.Mui-focused": {
-          borderColor: 'gray'
-        }
-      }} />
-      <IconButton onClick={() => handleDeselectMarker()} aria-label="back">
+      <OutlinedInput 
+        fullWidth 
+        placeholder="Adres" 
+        sx={{
+          borderRadius: "40px"
+        }} 
+        onChange={(event: React.ChangeEvent<HTMLInputElement>) => {
+          setSearchPhrase(event.target.value);
+        }}
+      />
+      <IconButton onClick={() => handleSearchLocation()} aria-label="back">
         <ArrowForwardIcon />
       </IconButton>
     </div>
@@ -189,14 +203,7 @@ const LeafletMap: React.FC<InputWindowProps> = ({
               <div className='description'>{point.description}</div>
             </div>
             <Button
-              onClick={() => handleSelectMarker(point)}
-              sx={{
-                borderRadius: "20px",
-                bgcolor: "rgb(106,24,19)",
-                ':hover': {
-                  bgcolor: 'rgb(106,24,19)'
-                }
-              }} variant='contained'>
+              onClick={() => handleSelectMarker(point)} variant='contained'>
               <Typography>Wybierz punkt</Typography>
             </Button>
           </div>
@@ -205,10 +212,9 @@ const LeafletMap: React.FC<InputWindowProps> = ({
 
   return <ThemeProvider theme={theme}>
     <div className='container'>
-      {/* {position ? <p>latitude: {position.lat.toFixed(4)}, longitude: {position.lng.toFixed(4)}, zoom:{map ? map.getZoom() : null}{' '}</p> : null} */}
       <div className='container-map'>
         <MapContainer
-          center={[mapCenterX, mapCenterY]}
+          center={baseMapPosition}
           zoom={zoom}
           ref={setMap}>
           <TileLayer
